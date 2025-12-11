@@ -21,11 +21,11 @@ def main():
     print(f"[Launcher] Receiver window opened on port {port}.")
 
     # 서버 준비시간
-    time.sleep(1)
+    time.sleep(5)
 
     # Sender 실행
     subprocess.Popen(
-        f'start cmd /c python -u "{sender_path}" {port}',
+        f'start cmd python -u "{sender_path}" {port}',
         shell=True
     )
     print("[Launcher] Sender window opened.")

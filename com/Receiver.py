@@ -1,4 +1,3 @@
-# com/Receiver.py
 import socket
 import sys
 
@@ -23,9 +22,9 @@ def main() -> None:
     # 포트는 인자로 받기 (없으면 기본 9000)
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 9000
 
-    # 1) Receiver 인스턴스 생성 → RSA 키 2개 자동 생성
+    # 🔑 RSA 키는 항상 자동 생성 (p,q,r,e 모두 내부에서 랜덤)
     rcv = CryptoReceiver(2048)
-    print("[Receiver] RSA (짝수/홀수) 키 생성 완료.")
+    print("[Receiver] 자동 생성 RSA (짝수/홀수) 키 초기화 완료.")
 
     # 2) 서버 소켓 열기
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -55,7 +54,7 @@ def main() -> None:
     enc_seed = int(enc_seed_data)
     print("[Receiver] 암호화된 시드 수신 완료.")
 
-    # 5) 하이브리드 암호 초기화
+    # 5) 하이브리드 암호 초기화 (LFSR seed 복원)
     rcv.seed_init(enc_seed)
 
     print("[Receiver] 메시지 수신 준비 완료.")

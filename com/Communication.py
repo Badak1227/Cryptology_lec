@@ -1,6 +1,6 @@
-# com/Communication.py
 import os
 import secrets
+import hashlib
 from typing import Optional, Tuple
 
 from crypto.RSA import RSA3P
@@ -54,6 +54,7 @@ def short_hex(data: bytes, front: int = 8, back: int = 6) -> str:
 
 # ====== 공개키(N, e)로만 RSA 암호화 (메시지용, 짝/홀 각각 다른 키) ======
 
+
 def rsa_nlen(N: int) -> int:
     """모듈러스 N의 바이트 길이."""
     return (N.bit_length() + 7) // 8
@@ -96,27 +97,44 @@ def rsa_encrypt_bytes_public(M: bytes, N: int, e: int) -> bytes:
 
     return bytes(res)
 
+
 # --- 교차 인덱스 기반 결합 ---
+
+
 def interleave(bytes_even: bytes, bytes_odd: bytes) -> bytes:
     """[A0, B0, A1, B1, A2, B2...] 형태로 결합"""
     res = bytearray()
-
     for a, b in zip(bytes_even, bytes_odd):
         res.append(a)
         res.append(b)
     return bytes(res)
 
+
 def deinterleave(mixed: bytes) -> Tuple[bytes, bytes]:
     """[A0, B0, A1, B1, A2, B2...] 형태로 분리"""
-    bytes_even = mixed[0::2] # 인덱스 0, 2, 4...
-    bytes_odd = mixed[1::2] # 인덱스 1, 3, 5...
+    bytes_even = mixed[0::2]  # 인덱스 0, 2, 4...
+    bytes_odd = mixed[1::2]   # 인덱스 1, 3, 5...
     return bytes_even, bytes_odd
+
+
+# --- 사용자 키 문자열 → LFSR seed 2개 생성 ---
+
+
+def derive_seeds_from_key(key: str):
+    """
+    사용자 키 문자열 → SHA-256 → 앞 6바이트(48비트)를
+    짝수/홀수용 24비트 시드 두 개로 나눈다.
+    """
+    h = hashlib.sha256(key.encode("utf-8")).digest()  # 32 bytes
+    seed_even = int.from_bytes(h[0:3], "big")  # 24bit
+    seed_odd = int.from_bytes(h[3:6], "big")  # 24bit
+    return seed_even, seed_odd
 
 
 class Receiver:
     """
     수신자:
-    - 짝/홀 메시지용 RSA3P 키를 각각 1개씩 생성 (총 2개)
+    - 짝/홀 메시지용 RSA3P 키를 각각 1개씩 자동 생성 (총 2개)
     - enc_seed 는 짝수용 키(rsa_even)로 복호화
     - 이후 메시지:
         - 짝수 스트림: rsa_even.decrypt_bytes()
@@ -125,7 +143,7 @@ class Receiver:
     """
 
     def __init__(self, bits: int = 2048) -> None:
-        # 짝/홀 메시지용 RSA 키
+        # 항상 자동 생성 (p,q,r,e 모두 내부에서 랜덤)
         self.rsa_even = RSA3P(bits)
         self.rsa_odd = RSA3P(bits)
 
@@ -142,6 +160,7 @@ class Receiver:
         return (self.rsa_even.N, self.rsa_even.e), (self.rsa_odd.N, self.rsa_odd.e)
 
     def seed_init(self, enc_seed: int) -> None:
+        # enc_seed = (seed_even << 24) | seed_odd 를 짝수용 RSA로 복호
         M = self.rsa_even.decryption(enc_seed)
 
         self.seed_even = (M >> 24) & ((1 << 24) - 1)
@@ -155,10 +174,9 @@ class Receiver:
     def decrypt(self, cipher: bytes) -> bytes:
         """
         통신으로 받은 암호문(cipher)을 복호화:
-        1) [4바이트 짝수 암호문 길이] 파싱
-        2) 짝/홀 암호문 분리
-        3) RSA3P로 각각 복호 → 짝/홀 스트림
-        4) Hybrid_3RLC.decrypt_merge()로 평문 복원
+        1) 짝/홀 암호문 분리
+        2) RSA3P로 각각 복호 → 짝/홀 스트림
+        3) Hybrid_3RLC.decrypt_merge()로 평문 복원
         """
         if self.cipher is None:
             raise RuntimeError("Receiver: seed_init이 아직 호출되지 않았습니다.")
@@ -189,12 +207,16 @@ class Sender:
     - 짝수용 공개키로 enc_seed 암호화해서 seed 전송
     - 같은 seed로 Hybrid_3RLC 초기화
     - 각 메시지:
-        1) Hybrid_3RLC.encrypt_split() → 짝/홀 스트림 생성
+        1) Hybrid_3RLC.encrypt_split() → 짝/홀 스트림
         2) 각 스트림을 대응하는 공개키로 RSA 암호화
-        3) [짝수 암호문 길이(4B)] + [짝수 암호문] + [홀수 암호문] 패킹해서 반환
+        3) 짝/홀 암호문을 인덱스 기반으로 교차결합(interleave)하여 패킷 생성
     """
 
-    def __init__(self, public_keys: Tuple[Tuple[int, int], Tuple[int, int]]) -> None:
+    def __init__(
+        self,
+        public_keys: Tuple[Tuple[int, int], Tuple[int, int]],
+        key: Optional[str] = None,
+    ) -> None:
         (N_even, e_even), (N_odd, e_odd) = public_keys
 
         self.N_even, self.e_even = N_even, e_even
@@ -203,9 +225,14 @@ class Sender:
         print(f"[Sender]  짝수 키: N={short_int(self.N_even)}, e={self.e_even}")
         print(f"[Sender]  홀수 키: N={short_int(self.N_odd)},  e={self.e_odd}")
 
-        # 24비트 랜덤 seed 2개 생성
-        self.seed_even = secrets.randbits(24)
-        self.seed_odd = secrets.randbits(24)
+        # 🔑 LFSR 시드 자동/수동 선택
+        if key is None:
+            # 랜덤 24비트 2개
+            self.seed_even = secrets.randbits(24)
+            self.seed_odd = secrets.randbits(24)
+        else:
+            # 사용자 키 문자열 기반
+            self.seed_even, self.seed_odd = derive_seeds_from_key(key)
 
         # 48비트 하나로 묶기
         M = (self.seed_even << 24) | self.seed_odd
@@ -224,7 +251,7 @@ class Sender:
         평문 msg를 암호화:
         1) Hybrid_3RLC.encrypt_split() → 짝/홀 스트림
         2) 각 스트림을 대응하는 공개키로 RSA 암호화
-        3) [짝수 암호문 길이(4B)] + [짝수 암호문] + [홀수 암호문] 반환
+        3) 짝/홀 암호문을 인덱스 기반으로 교차결합(interleave)하여 패킷 생성
         """
         print(f"[Sender] [1] 평문 ({len(msg)}B): {msg}")
 

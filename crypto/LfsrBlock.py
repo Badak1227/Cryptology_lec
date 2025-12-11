@@ -6,7 +6,7 @@ class LfsrBlock:
     def __init__(
         self,
         seeds: Sequence[int],          # [seed1, seed2, seed3]
-        width: int = 9                 # 기본 9비트
+        width: int = 8                 # 기본 9비트
     ):
         if len(seeds) != 3:
             raise ValueError("seeds는 [lfsr1, lfsr2, lfsr3] 3개가 필요합니다.")
@@ -31,7 +31,7 @@ class LfsrBlock:
         out_bit = (lfsr >> (self.width - 1)) & 1
 
         fb = 0
-        for pos in [8,6,5,4,0]:
+        for pos in [7, 5, 4, 3]:
             fb ^= (lfsr >> pos) & 1
 
         lfsr = ((lfsr << 1) & self.mask) | fb
@@ -45,10 +45,10 @@ class LfsrBlock:
         out3 = 0
 
         # 초기 8비트 출력값 제외
-        for _ in range(8):
-            self.lfsr1, r1 = self.shift(self.lfsr1)
-            self.lfsr2, r2 = self.shift(self.lfsr2)
-            self.lfsr3, r3 = self.shift(self.lfsr3)
+        for _ in range(7):
+            self.lfsr1, _ = self.shift(self.lfsr1)
+            self.lfsr2, _ = self.shift(self.lfsr2)
+            self.lfsr3, _ = self.shift(self.lfsr3)
 
         # 8비트 뽑기
         for _ in range(8):
